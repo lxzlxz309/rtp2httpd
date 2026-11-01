@@ -1,0 +1,140 @@
+diff --git a/src/placeholder b/src/placeholder
+--- a/src/access_log.c	2026-10-02 17:34:07.000000000 +0800
++++ b/src/access_log.c	2026-11-01 15:22:09.280392747 +0800
+@@ -409,7 +409,8 @@
+   access_log_format_times(now_ms, time_iso8601, sizeof(time_iso8601), time_local, sizeof(time_local), msec,
+                           sizeof(msec));
+   access_log_parse_remote_addr(client->client_addr, remote_addr, sizeof(remote_addr), remote_port, sizeof(remote_port));
+-  snprintf(request, sizeof(request), "%s %s", c->http_req->method[0] ? c->http_req->method : "-", client->service_url);
++  snprintf(request, sizeof(request), "%s %s",
++         (c->http_req && c->http_req->method[0] != '\0') ? c->http_req->method : "-", client->service_url);
+ 
+   for (const char *p = format; *p; p++) {
+     if (*p != '$') {
+@@ -502,3 +503,76 @@
+ 
+   access_log_buffer_free(&buf);
+ }
++
++/* Append the session start timestamp as an ISO-8601 string. */
++static int access_log_append_session_start(access_log_buffer_t *buf, int64_t start_ms) {
++  char start_iso8601[64];
++  char start_local[64];
++  char start_msec[32];
++  access_log_format_times(start_ms, start_iso8601, sizeof(start_iso8601), start_local, sizeof(start_local),
++                          start_msec, sizeof(start_msec));
++  return access_log_append_escaped(buf, start_iso8601);
++}
++/* Write a session-end access log line when the connection is torn down.
++ *
++ * The line carries the same columns as the session-start line (rendered with
++ * the current time, i.e. the stop time), plus one extra column containing the
++ * session start time:
++ *
++ *   <start-line columns>,<session start ISO-8601>
++ *
++ * e.g. with a three-column format "$remote_addr:$remote_port,$time_iso8601,
++ * $upstream_url" the end line is:
++ *
++ *   192.168.1.5:34567,2026-10-30T01:06:52+08:00,rtp://228.1.1.174:4120,2026-10-30T01:06:40+08:00
++ *
++ * A session that never reaches this point (e.g. the process crashes) only
++ * leaves its start line behind, which consumers can still handle.
++ */
++void access_log_write_connection_end(connection_t *c, service_t *service, int status_index) {
++  if (!c || !service || !config.access_log || config.access_log[0] == '\0' || !status_shared)
++    return;
++  if (status_index < 0 || status_index >= STATUS_MAX_CLIENTS)
++    return;
++  if (c->access_log_start_ms <= 0)
++    return;
++  client_stats_t *client = &status_shared->clients[status_index];
++  if (!atomic_load_explicit(&client->active, memory_order_acquire) || client->payload.service_url[0] == '\0')
++    return;
++  pid_t owner_pid = (pid_t)atomic_load_explicit(&client->owner_pid, memory_order_relaxed);
++  int fd = access_log_ensure_fd(config.access_log);
++  if (fd < 0)
++    return;
++  const char *format =
++      (config.log_format && config.log_format[0] != '\0') ? config.log_format : DEFAULT_ACCESS_LOG_FORMAT;
++  access_log_buffer_t buf;
++  if (access_log_buffer_init(&buf) < 0) {
++    logger(LOG_ERROR, "Failed to allocate access log buffer");
++    return;
++  }
++  if (access_log_render(&buf, c, service, &client->payload, owner_pid, format) < 0) {
++    logger(LOG_ERROR, "Failed to render access log end line");
++    access_log_buffer_free(&buf);
++    return;
++  }
++  /* access_log_render() appends '\n'; replace it with ",<start time>\n". */
++  if (buf.len > 0 && buf.data[buf.len - 1] == '\n')
++    buf.len--;
++  buf.data[buf.len] = '\0';
++  if (access_log_append_char(&buf, ',') < 0 ||
++      access_log_append_session_start(&buf, c->access_log_start_ms) < 0) {
++    logger(LOG_ERROR, "Failed to append session start timestamp to access log end line");
++    access_log_buffer_free(&buf);
++    return;
++  }
++  if (access_log_append_char(&buf, '\n') < 0) {
++    logger(LOG_ERROR, "Failed to terminate access log end line");
++    access_log_buffer_free(&buf);
++    return;
++  }
++  if (access_log_write_line(fd, buf.data, buf.len) < 0) {
++    logger(LOG_ERROR, "Failed to write access log %s: %s", config.access_log, strerror(errno));
++    access_log_close_fd();
++  }
++  access_log_buffer_free(&buf);
++}
+diff --git a/src/placeholder b/src/placeholder
+--- a/src/access_log.h	2026-10-02 17:34:07.000000000 +0800
++++ b/src/access_log.h	2026-11-01 15:22:09.279683164 +0800
+@@ -5,6 +5,8 @@
+ typedef struct service_s service_t;
+ 
+ void access_log_write_connection(connection_t *c, service_t *service, int status_index);
++void access_log_write_connection_end(connection_t *c, service_t *service, int status_index);
++
+ void access_log_reopen(void);
+ void access_log_cleanup(void);
+ 
+diff --git a/src/placeholder b/src/placeholder
+--- a/src/connection.c	2026-10-02 17:34:07.000000000 +0800
++++ b/src/connection.c	2026-11-01 15:22:09.278661256 +0800
+@@ -631,6 +631,12 @@
+    * The function is lightweight and only acts if conditions are met */
+   buffer_pool_try_shrink();
+ 
++  /* Write the session-end access log line (client addr, stop time, URL, and
++   * session start time) before tearing down the service and status slot. */
++  if (c->status_index >= 0 && c->access_log_start_ms > 0) {
++    access_log_write_connection_end(c, c->service, c->status_index);
++  }
++
+   /* Free the per-connection service instance */
+   if (c->service) {
+     service_free(c->service);
+@@ -1242,6 +1248,9 @@
+       service_free(service);
+       return 0;
+     } else {
++      /* Record the session start time so the session-end log line can carry
++       * both the stop time and the start time. */
++      c->access_log_start_ms = get_realtime_ms();
+       access_log_write_connection(c, service, c->status_index);
+     }
+   } else {
+diff --git a/src/placeholder b/src/placeholder
+--- a/src/connection.h	2026-10-02 17:34:07.000000000 +0800
++++ b/src/connection.h	2026-11-01 15:22:09.276821431 +0800
+@@ -79,6 +79,8 @@
+   /* r2h-token Set-Cookie flag: set cookie when token was provided via URL
+      query */
+   int should_set_r2h_cookie;
++  /* Session-start access log write time (ms since epoch); 0 = start line not written */
++  int64_t access_log_start_ms;
+ } connection_t;
+ 
+ typedef enum {
