@@ -28,19 +28,74 @@ rtp2httpd/
 └── docs/             # 官方文档（配置参考）
 ```
 
-## 快速编译（换环境克隆即编译）
+## 使用方法（换环境克隆即编译）
+
+### 1. 前提
+
+- 已就绪的 OpenWrt / ImmortalWrt 编译环境（`./scripts/feeds update -a` 跑过一次，feeds 目录已初始化）。
+- 编译工具链由 OpenWrt 构建系统自动提供（cmake / Ninja 会以 host 工具自动构建，无需手动安装）。
+- 使用 SSH 方式克隆需已配置 GitHub SSH key；也可改用 HTTPS 地址。
+
+### 2. 克隆到 feeds 的 packages 目录
 
 ```bash
+# 方式一：直接克隆到目标位置（推荐）
+git clone git@github.com:lxzlxz309/rtp2httpd.git <openwrt-src>/feeds/packages/net/rtp2httpd
+
+# 方式二：先克隆到任意位置，再拷贝进 feeds
 git clone git@github.com:lxzlxz309/rtp2httpd.git
 cp -r rtp2httpd <openwrt-src>/feeds/packages/net/
+```
+
+> ⚠️ 若使用 ImmortalWrt：其 packages feed **自带** rtp2httpd 包，本仓库会**覆盖**该目录
+> 以替换官方包；若使用官方 OpenWrt（packages feed 无此包），则纯属新增，无冲突。
+
+### 3. 注册到 feeds
+
+```bash
 cd <openwrt-src>
-./scripts/feeds update -i
+./scripts/feeds update -i        # 只刷新 feed 索引，识别新放入的包
 ./scripts/feeds install rtp2httpd
+```
+
+### 4. 配置（menuconfig）
+
+```bash
+make menuconfig
+# 进入 Network → rtp2httpd
+#   按 Y：编入固件（固件里直接带）
+#   按 M：编成独立安装包（推荐，产物为 .apk / .ipk）
+```
+
+> 只想单独出包、不改固件配置的，可以跳过 menuconfig，直接执行第 5 步。
+
+### 5. 单独编译
+
+```bash
 make package/rtp2httpd/compile V=s
 ```
 
+产物路径：
+
+```
+bin/packages/<目标架构>/packages/rtp2httpd-3.17.2-r1.apk
+# 例：bin/packages/aarch64_cortex-a53/packages/rtp2httpd-3.17.2-r1.apk
+```
+
+（传统 ipk 固件则输出在 `bin/packages/<架构>/rtp2httpd_3.17.2-r1_<架构>.ipk`。）
+
+### 6. 编入固件（可选）
+
+在 menuconfig 中按 `Y` 选中后，直接整体编译：
+
+```bash
+make V=s        # 全量编译固件
+```
+
+## 构建模式说明
+
 - **默认本地模式**：`Makefile` 中的 `Build/Prepare` 会把仓库内置的 `src/`（保留目录结构）、
-  `CMakeLists.txt`、`LICENSE`、`rtp2httpd.conf` 组装为构建目录，不访问上游网络、不下载、不重新打补丁。
+  `CMakeLists.txt`、`LICENSE`、`rtp2httpd.conf` 组装为构建目录，**不访问上游网络、不下载、不重新打补丁**。
   已实测通过（make 4.3 / cmake + Ninja）。
 - **跟随上游模式**：编辑 `Makefile`，删除 `Build/Prepare` / `Build/Patch` 定义并取消注释
   `PKG_SOURCE` / `PKG_SOURCE_URL` / `PKG_HASH` 三行即可（此时 `patches/*.patch` 自动应用）。
