@@ -3,10 +3,18 @@
 # Copyright (C) 2026 ImmortalWrt.org
 #
 # ============ 本地源码模式（默认） ============
-# 本仓库内置完整 C 源码（src/，已应用 010-session-end-log.patch），
-# 克隆仓库放到 feeds 下即可直接编译，无需从上游下载源码包。
-# 若需跟随上游发布（下载 tar.gz + 自动应用 patches/*.patch），
-# 请删除下方 Build/Prepare 定义，并取消注释 PKG_SOURCE / PKG_SOURCE_URL / PKG_HASH。
+# 本仓库内置完整 C 源码（src/ 为源码树、CMakeLists.txt 与 src/ 同级，
+# 与上游 stackia/rtp2httpd 源码包结构一致），已应用 010-session-end-log.patch。
+# Build/Prepare 将 src/ 与 CMakeLists.txt 复制为构建目录，无需从上游下载源码包。
+# 克隆整个仓库目录放入 feeds 后即可直接编译：
+#   ./scripts/feeds update -i && ./scripts/feeds install rtp2httpd
+#   make package/rtp2httpd/compile V=s
+#
+# 【切换为上游下载模式】（跟随上游 stackia/rtp2httpd 发布）：
+#   1. 删除本仓库 src/ 目录与 CMakeLists.txt
+#   2. 删除下方空的 define Build/Patch 与 define Build/Prepare
+#   3. 取消注释 PKG_SOURCE / PKG_SOURCE_URL / PKG_HASH 三行
+#   之后 010-session-end-log.patch 会由构建系统自动应用。
 
 include $(TOPDIR)/rules.mk
 
@@ -26,6 +34,19 @@ PKG_LICENSE_FILES:=LICENSE
 include $(INCLUDE_DIR)/package.mk
 include $(INCLUDE_DIR)/cmake.mk
 
+# 本地模式：复制 src/（源码树）+ 根目录 CMakeLists.txt 到构建目录
+define Build/Prepare
+	mkdir -p $(PKG_BUILD_DIR)
+	cp -r $(CURDIR)/src $(PKG_BUILD_DIR)/
+	cp $(CURDIR)/CMakeLists.txt $(PKG_BUILD_DIR)/
+	cp $(CURDIR)/LICENSE $(PKG_BUILD_DIR)/
+	cp $(CURDIR)/rtp2httpd.conf $(PKG_BUILD_DIR)/
+endef
+
+# 本地模式：010-session-end-log.patch 已合入 src/，跳过 patch 应用
+define Build/Patch
+endef
+
 define Package/rtp2httpd
   SECTION:=net
   CATEGORY:=Network
@@ -43,12 +64,6 @@ endef
 
 define Package/rtp2httpd/conffiles
 /etc/config/rtp2httpd
-endef
-
-# 本地源码模式：把仓库内置 src/ 复制为构建目录（跳过下载与 patch 应用）
-define Build/Prepare
-	mkdir -p $(PKG_BUILD_DIR)
-	$(CP) -r $(CURDIR)/src/. $(PKG_BUILD_DIR)/
 endef
 
 CMAKE_OPTIONS += -DENABLE_AGGRESSIVE_OPT=ON
