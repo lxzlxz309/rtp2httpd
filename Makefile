@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0-only
 #
 # Copyright (C) 2026 ImmortalWrt.org
+#
+# ============ 本地源码模式（默认） ============
+# 本仓库内置完整 C 源码（src/，已应用 010-session-end-log.patch），
+# 克隆仓库放到 feeds 下即可直接编译，无需从上游下载源码包。
+# 若需跟随上游发布（下载 tar.gz + 自动应用 patches/*.patch），
+# 请删除下方 Build/Prepare 定义，并取消注释 PKG_SOURCE / PKG_SOURCE_URL / PKG_HASH。
 
 include $(TOPDIR)/rules.mk
 
@@ -8,9 +14,10 @@ PKG_NAME:=rtp2httpd
 PKG_VERSION:=3.17.2
 PKG_RELEASE:=1
 
-PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
-PKG_SOURCE_URL:=https://codeload.github.com/stackia/rtp2httpd/tar.gz/v$(PKG_VERSION)?
-PKG_HASH:=ce866091321a0d69dff7e8f7dda5d68be94e901659ed7d2ff4896029c8200ee6
+# --- 上游下载模式（默认关闭；本地模式请保持注释）---
+# PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
+# PKG_SOURCE_URL:=https://codeload.github.com/stackia/rtp2httpd/tar.gz/v$(PKG_VERSION)?
+# PKG_HASH:=ce866091321a0d69dff7e8f7dda5d68be94e901659ed7d2ff4896029c8200ee6
 
 PKG_MAINTAINER:=Tianling Shen <cnsztl@immrotalwrt.org>
 PKG_LICENSE:=GPL-2.0-or-later
@@ -36,6 +43,12 @@ endef
 
 define Package/rtp2httpd/conffiles
 /etc/config/rtp2httpd
+endef
+
+# 本地源码模式：把仓库内置 src/ 复制为构建目录（跳过下载与 patch 应用）
+define Build/Prepare
+	mkdir -p $(PKG_BUILD_DIR)
+	$(CP) -r $(CURDIR)/src/. $(PKG_BUILD_DIR)/
 endef
 
 CMAKE_OPTIONS += -DENABLE_AGGRESSIVE_OPT=ON
